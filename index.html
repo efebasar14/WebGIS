@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Şarj İstasyonları Navigasyon</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.css" />
+
+<style>
+body, html { margin:0; padding:0; height:100%; }
+#map { width: 100%; height: 100%; }
+#nearestBtn {
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1000;
+    padding: 10px 20px;
+    background: #007bff;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+}
+#nearestBtn:hover { background: #0056b3; }
+</style>
+</head>
+<body>
+
+<button id="nearestBtn">En Yakın İstasyona Götür</button>
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.min.js"></script>
+
+<script>
+const map = L.map('map').setView([39.925, 32.866], 6); // Türkiye merkez
+let userLat, userLng;
+let routingControl = null;
+let nearestStation = null;
+const stationMarkers = [];
+
+const nearestBtn = document.getElementById('nearestBtn');
+
+// Harita tile
+let internetAvailable = true;
+try {
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+} catch {
+    internetAvailable = false;
+    alert("İnternet yok, sadece harita ve istasyonlar gösterilecek.");
+}
+
+// İstasyonları yükle
+async function loadStations() {
+    if (!internetAvailable) return;
+
+    try {
+        const stations = await fetch('http://localhost:3000/stations').then(res => res.json());
+
+        let minDistance = Infinity;
+        stations.forEach(station => {
+            if (!station.latitude || !station.longitude) return;
+
+            const marker = L.marker([station.latitude, station.longitude]).addTo(map);
+            marker.bindPopup(`<b>${station.title}</b><br>${station.city}`);
+            stationMarkers.push({marker, station});
+
+            marker.on('click', () => {
+                if (userLat && userLng) drawRoute(station.latitude, station.longitude);
+            });
+
+            if (userLat && userLng) {
+                const d = map.distance([userLat, userLng], [station.latitude, station.longitude]);
+                if (d < minDistance) {
+                    minDistance = d;
+                    nearestStation = station;
+                }
+            }
+        });
+
+    } catch {
+        internetAvailable = false;
+        alert("İnternet yok, sadece harita ve istasyonlar gösterilecek.");
+    }
+}
+
+// Rota çiz
+function drawRoute(lat, lng) {
+    if (!internetAvailable) return;
+
+    if (routingControl) map.removeControl(routingControl);
+
+    routingControl = L.Routing.control({
+        waypoints: [
+            L.latLng(userLat, userLng),
+            L.latLng(lat, lng)
+        ],
+        routeWhileDragging: true
+    }).addTo(map);
+}
+
+// En yakın istasyona git
+nearestBtn.addEventListener('click', () => {
+    if (nearestStation && internetAvailable) {
+        drawRoute(nearestStation.latitude, nearestStation.longitude);
+        map.setView([nearestStation.latitude, nearestStation.longitude], 14);
+    } else {
+        alert("Konum veya internet yok, en yakın istasyona rota çizilemiyor!");
+    }
+});
+
+// Senaryo 1 ve 2: Konum alma
+if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(async function(position) {
+        userLat = position.coords.latitude;
+        userLng = position.coords.longitude;
+
+        L.marker([userLat, userLng]).addTo(map).bindPopup("Senin konumun").openPopup();
+
+        await loadStations();
+    }, async function() {
+        // Senaryo 2: Konum yok, adres ile al
+        const address = prompt("Konum alınamadı, lütfen adresinizi girin:");
+        if (address && internetAvailable) {
+            const geocodeRes = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}`);
+            const data = await geocodeRes.json();
+            if (data.length > 0) {
+                userLat = parseFloat(data[0].lat);
+                userLng = parseFloat(data[0].lon);
+                L.marker([userLat, userLng]).addTo(map).bindPopup("Senin konumun").openPopup();
+            } else {
+                alert("Adres bulunamadı, sadece harita ve istasyonlar gösterilecek.");
+            }
+        }
+        await loadStations();
+    });
+} else {
+    // Senaryo 2: Tarayıcı konum desteklemiyor
+    loadStations();
+}
+
+// Senaryo 3: İnternet yoksa loadStations zaten çalışmaz
+</script>
+</body>
+</html>
